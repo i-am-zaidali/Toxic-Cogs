@@ -3,6 +3,7 @@ import functools
 from datetime import timezone
 import io
 import csv
+from typing import List
 
 import aiohttp
 import discord
@@ -121,6 +122,8 @@ class Args(Converter):
 
         # Extra
         parser.add_argument("--format", nargs="*", dest="format", default=["menu"])
+        parser.add_argument("--add-roles", nargs="*", dest="add-roles", default=[])
+        parser.add_argument("--remove-roles", nargs="*", dest="remove-roles", default=[])
 
         try:
             vals = vars(parser.parse_args(argument.split(" ")))
@@ -128,6 +131,7 @@ class Args(Converter):
             raise BadArgument() from exc
 
         try:
+            print(vals)
             for key, value in vals.items():
                 if type(value) == list:
                     split_words = value
@@ -234,6 +238,33 @@ class Args(Converter):
                 raise BadArgument(f"Couldn't find a role matching: {role}")
             new.append(r)
         vals["not-any-role"] = new
+        
+        new = []
+        for role in vals["add-roles"]:
+            r : discord.Role = await rc.convert(ctx, role)
+            if not r:
+                raise BadArgument(f"Couldn't find a role matching: {role}")
+            if ctx.guild.me.top_role.position > r.position and ctx.author.top_role.position > r.position and not (r.is_bot_managed() and r.is_default() and r.is_integration()):
+                new.append(r)
+                
+            else:
+                raise BadArgument(f"You can't add roles if I dont have manage role permissions or if the role is above your or mine highest role or is bot managed.")
+            
+        vals["add-roles"] = new
+        
+        new = []
+        for role in vals["remove-roles"]:
+            r : discord.Role = await rc.convert(ctx, role)
+            if not r:
+                raise BadArgument(f"Couldn't find a role matching: {role}")
+            if ctx.guild.me.top_role.position > r.position and ctx.author.top_role.position > r.position and not (r.is_bot_managed() and r.is_default() and r.is_integration()):
+                new.append(r)
+                
+            else:
+                raise BadArgument(f"You can't add roles if I dont have manage role permissions or if the role is above your or mine highest role or is bot managed.")
+            new.append(r)
+            
+        vals["remove-roles"] = new
 
         # Daaaaaaaaaaaaaaaaaates
 
@@ -707,7 +738,8 @@ class Targeter(commands.Cog):
         matched = await self.bot.loop.run_in_executor(None, compact)
         return matched
 
-    @checks.bot_has_permissions(embed_links=True)
+    @checks.bot_has_permissions(embed_links=True, manage_roles=True)
+    @commands.has_permissions(manage_roles=True)
     @commands.guild_only()
     @commands.group(invoke_without_command=True)
     async def target(self, ctx, *, args: Args):
@@ -717,10 +749,16 @@ class Targeter(commands.Cog):
         # await ctx.send(args)
         async with ctx.typing():
             compact = functools.partial(self.lookup, ctx, args)
-            matched = await self.bot.loop.run_in_executor(None, compact)
+            matched : List[discord.Member] = await self.bot.loop.run_in_executor(None, compact)
 
             if len(matched) != 0:
                 color = await ctx.embed_color()
+                if roles:=args["add-roles"]:
+                    for user in matched:
+                        await user.add_roles(*roles, reason=f"Automatic Role adding by targeter requested by {ctx.author}")
+                if roles:=args["remove-roles"]:
+                    for user in matched:
+                        await user.remove_roles(*roles, reason=f"Automatic Role removing by targeter requested by {ctx.author}")
                 if args["format"] == "menu":
                     string = " ".join([m.mention for m in matched])
                     embed_list = []
@@ -852,6 +890,7 @@ class Targeter(commands.Cog):
         special = discord.Embed(title="Target Arguments - Special Notes")
         desc = (
             "`--format` - How to display results.  At the moment, must be `page` for posting on a website, or `menu` for showing the results in Discord.\n"
+            "`--add-roles` - To add given roles to a user. Mentions, names and ids are all allowed."
             "\n"
             "If at any time you need to include quotes at the beginning or ending of something (such as a nickname or a role), include a slash (\) right before it."
         )
